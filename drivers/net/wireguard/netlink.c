@@ -9,6 +9,7 @@
 #include "socket.h"
 #include "queueing.h"
 #include "messages.h"
+#include "obfuscation.h"
 
 #include <uapi/linux/wireguard.h>
 
@@ -27,7 +28,7 @@ static const struct nla_policy device_policy[WGDEVICE_A_MAX + 1] = {
 	[WGDEVICE_A_FLAGS]		= { .type = NLA_U32 },
 	[WGDEVICE_A_LISTEN_PORT]	= { .type = NLA_U16 },
 	[WGDEVICE_A_FWMARK]		= { .type = NLA_U32 },
-	[WGDEVICE_A_PEERS]		= { .type = NLA_NESTED }
+	[WGDEVICE_A_PEERS]		= { .type = NLA_NESTED },
 };
 
 static const struct nla_policy peer_policy[WGPEER_A_MAX + 1] = {
@@ -40,7 +41,8 @@ static const struct nla_policy peer_policy[WGPEER_A_MAX + 1] = {
 	[WGPEER_A_RX_BYTES]				= { .type = NLA_U64 },
 	[WGPEER_A_TX_BYTES]				= { .type = NLA_U64 },
 	[WGPEER_A_ALLOWEDIPS]				= { .type = NLA_NESTED },
-	[WGPEER_A_PROTOCOL_VERSION]			= { .type = NLA_U32 }
+	[WGPEER_A_PROTOCOL_VERSION]			= { .type = NLA_U32 },
+	[WGPEER_A_OBFUSCATION]				= { .type = NLA_U8 },
 };
 
 static const struct nla_policy allowedip_policy[WGALLOWEDIP_A_MAX + 1] = {
@@ -143,6 +145,15 @@ get_peer(struct wg_peer *peer, struct sk_buff *skb, struct dump_ctx *ctx)
 		    nla_put_u64_64bit(skb, WGPEER_A_RX_BYTES, peer->rx_bytes,
 				      WGPEER_A_UNSPEC) ||
 		    nla_put_u32(skb, WGPEER_A_PROTOCOL_VERSION, 1))
+			goto err;
+
+		if (READ_ONCE(peer->obfuscation_configured) &&
+		    nla_put_u8(skb, WGPEER_A_OBFUSCATION,
+			       !!READ_ONCE(peer->obfuscation_outbound)))
+			goto err;
+
+		if (nla_put_u8(skb, WGPEER_A_OBFUSCATION_FORMAT,
+			       wg_obf_peer_uapi_format(peer)))
 			goto err;
 
 		read_lock_bh(&peer->endpoint_lock);
@@ -477,6 +488,17 @@ static int set_peer(struct wg_device *wg, struct nlattr **attrs)
 		peer->persistent_keepalive_interval = persistent_keepalive_interval;
 		if (send_keepalive)
 			wg_packet_send_keepalive(peer);
+	}
+
+	if (attrs[WGPEER_A_OBFUSCATION]) {
+		const u8 obfuscation = nla_get_u8(attrs[WGPEER_A_OBFUSCATION]);
+
+		if (obfuscation > 1) {
+			ret = -EINVAL;
+			goto out;
+		}
+		WRITE_ONCE(peer->obfuscation_configured, true);
+		WRITE_ONCE(peer->obfuscation_outbound, !!obfuscation);
 	}
 
 	if (netif_running(wg->dev))
