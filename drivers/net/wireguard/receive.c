@@ -10,6 +10,7 @@
 #include "messages.h"
 #include "cookie.h"
 #include "socket.h"
+#include "obfuscation.h"
 
 #include <linux/ip.h>
 #include <linux/ipv6.h>
@@ -32,28 +33,14 @@ static void update_rx_stats(struct wg_peer *peer, size_t len)
 
 #define SKB_TYPE_LE32(skb) (((struct message_header *)(skb)->data)->type)
 
-static size_t validate_header_len(struct sk_buff *skb)
+static void wg_obf_note_peer_format(struct wg_peer *peer, struct sk_buff *skb)
 {
-	if (unlikely(skb->len < sizeof(struct message_header)))
-		return 0;
-	if (SKB_TYPE_LE32(skb) == cpu_to_le32(MESSAGE_DATA) &&
-	    skb->len >= MESSAGE_MINIMUM_LENGTH)
-		return sizeof(struct message_data);
-	if (SKB_TYPE_LE32(skb) == cpu_to_le32(MESSAGE_HANDSHAKE_INITIATION) &&
-	    skb->len == sizeof(struct message_handshake_initiation))
-		return sizeof(struct message_handshake_initiation);
-	if (SKB_TYPE_LE32(skb) == cpu_to_le32(MESSAGE_HANDSHAKE_RESPONSE) &&
-	    skb->len == sizeof(struct message_handshake_response))
-		return sizeof(struct message_handshake_response);
-	if (SKB_TYPE_LE32(skb) == cpu_to_le32(MESSAGE_HANDSHAKE_COOKIE) &&
-	    skb->len == sizeof(struct message_handshake_cookie))
-		return sizeof(struct message_handshake_cookie);
-	return 0;
+	wg_obf_peer_note_rx_format(peer, PACKET_CB(skb)->obf_learned);
 }
 
-static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
+static int prepare_skb_header(struct sk_buff *skb)
 {
-	size_t data_offset, data_len, header_len;
+	size_t data_offset, data_len;
 	struct udphdr *udp;
 
 	if (unlikely(!wg_check_packet_protocol(skb) ||
@@ -86,11 +73,8 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 	if (unlikely(skb->len != data_len))
 		/* Final len does not agree with calculated len */
 		return -EINVAL;
-	header_len = validate_header_len(skb);
-	if (unlikely(!header_len))
-		return -EINVAL;
 	__skb_push(skb, data_offset);
-	if (unlikely(!pskb_may_pull(skb, data_offset + header_len)))
+	if (unlikely(!pskb_may_pull(skb, data_offset + sizeof(struct message_header))))
 		return -EINVAL;
 	__skb_pull(skb, data_offset);
 	return 0;
@@ -154,6 +138,7 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 						wg->dev->name, skb);
 			return;
 		}
+		wg_obf_note_peer_format(peer, skb);
 		wg_socket_set_peer_endpoint_from_skb(peer, skb);
 		net_dbg_ratelimited("%s: Receiving handshake initiation from peer %llu (%pISpfsc)\n",
 				    wg->dev->name, peer->internal_id,
@@ -176,6 +161,7 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 						wg->dev->name, skb);
 			return;
 		}
+		wg_obf_note_peer_format(peer, skb);
 		wg_socket_set_peer_endpoint_from_skb(peer, skb);
 		net_dbg_ratelimited("%s: Receiving handshake response from peer %llu (%pISpfsc)\n",
 				    wg->dev->name, peer->internal_id,
@@ -202,7 +188,7 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 	}
 
 	local_bh_disable();
-	update_rx_stats(peer, skb->len);
+	update_rx_stats(peer, PACKET_CB(skb)->obf_wire_len ?: skb->len);
 	local_bh_enable();
 
 	wg_timers_any_authenticated_packet_received(peer);
@@ -474,6 +460,8 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 			goto next;
 		}
 
+		wg_obf_note_peer_format(peer, skb);
+
 		if (unlikely(wg_socket_endpoint_from_skb(&endpoint, skb)))
 			goto next;
 
@@ -504,8 +492,9 @@ void wg_packet_decrypt_worker(struct work_struct *work)
 	struct sk_buff *skb;
 
 	while ((skb = ptr_ring_consume_bh(&queue->ring)) != NULL) {
+		struct noise_keypair *keypair = PACKET_CB(skb)->keypair;
 		enum packet_state state =
-			likely(decrypt_packet(skb, PACKET_CB(skb)->keypair)) ?
+			likely(decrypt_packet(skb, keypair)) ?
 				PACKET_STATE_CRYPTED : PACKET_STATE_DEAD;
 		wg_queue_enqueue_per_peer_rx(skb, state);
 		if (need_resched())
@@ -548,12 +537,21 @@ err_keypair:
 
 void wg_packet_receive(struct wg_device *wg, struct sk_buff *skb)
 {
-	if (unlikely(prepare_skb_header(skb, wg) < 0))
+	u8 msg_type;
+
+	if (unlikely(prepare_skb_header(skb) < 0))
 		goto err;
-	switch (SKB_TYPE_LE32(skb)) {
-	case cpu_to_le32(MESSAGE_HANDSHAKE_INITIATION):
-	case cpu_to_le32(MESSAGE_HANDSHAKE_RESPONSE):
-	case cpu_to_le32(MESSAGE_HANDSHAKE_COOKIE): {
+
+	msg_type = wg_obf_parse_message(skb);
+	if (unlikely(!msg_type))
+		goto err;
+	if (unlikely(!pskb_may_pull(skb, skb->len)))
+		goto err;
+
+	switch (msg_type) {
+	case MESSAGE_HANDSHAKE_INITIATION:
+	case MESSAGE_HANDSHAKE_RESPONSE:
+	case MESSAGE_HANDSHAKE_COOKIE: {
 		int cpu, ret = -EBUSY;
 
 		if (unlikely(!rng_is_initialized()))
@@ -578,7 +576,7 @@ void wg_packet_receive(struct wg_device *wg, struct sk_buff *skb)
 			      &per_cpu_ptr(wg->handshake_queue.worker, cpu)->work);
 		break;
 	}
-	case cpu_to_le32(MESSAGE_DATA):
+	case MESSAGE_DATA:
 		PACKET_CB(skb)->ds = ip_tunnel_get_dsfield(ip_hdr(skb), skb);
 		wg_packet_consume_data(wg, skb);
 		break;

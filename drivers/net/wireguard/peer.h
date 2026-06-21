@@ -64,6 +64,9 @@ struct wg_peer {
 	u64 internal_id;
 	struct napi_struct napi;
 	bool is_dead;
+	bool obfuscation_configured;
+	bool obfuscation_outbound;
+	bool obfuscation_learned;
 };
 
 struct wg_peer *wg_peer_create(struct wg_device *wg,
