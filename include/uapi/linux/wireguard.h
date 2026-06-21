@@ -49,6 +49,11 @@
  *                    ...
  *                ...
  *            WGPEER_A_PROTOCOL_VERSION: NLA_U32
+ *            WGPEER_A_OBFUSCATION: NLA_U8, 0 or 1 (vendor extension; omitted on
+ *                SET leaves reactive mode; present forces off or on)
+ *            WGPEER_A_OBFUSCATION_FORMAT: NLA_U8 (vendor extension, read-only;
+ *                WGPEER_OBFUSCATION_FORMAT_STANDARD or
+ *                WGPEER_OBFUSCATION_FORMAT_OBFUSCATED)
  *        0: NLA_NESTED
  *            ...
  *        ...
@@ -111,6 +116,8 @@
  *                                       most recent protocol will be used when
  *                                       this is unset. Otherwise, must be set
  *                                       to 1.
+ *            WGPEER_A_OBFUSCATION: NLA_U8, 0 or 1 (vendor extension; omit on
+ *                servers for reactive mode per peer; set on clients)
  *        0: NLA_NESTED
  *            ...
  *        ...
@@ -180,9 +187,17 @@ enum wgpeer_attribute {
 	WGPEER_A_TX_BYTES,
 	WGPEER_A_ALLOWEDIPS,
 	WGPEER_A_PROTOCOL_VERSION,
+	WGPEER_A_OBFUSCATION,
+	WGPEER_A_OBFUSCATION_FORMAT,
 	__WGPEER_A_LAST
 };
 #define WGPEER_A_MAX (__WGPEER_A_LAST - 1)
+
+enum wgpeer_obfuscation_format {
+	WGPEER_OBFUSCATION_FORMAT_UNKNOWN = 0,
+	WGPEER_OBFUSCATION_FORMAT_STANDARD = 1,
+	WGPEER_OBFUSCATION_FORMAT_OBFUSCATED = 2,
+};
 
 enum wgallowedip_attribute {
 	WGALLOWEDIP_A_UNSPEC,

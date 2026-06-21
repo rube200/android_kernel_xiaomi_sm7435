@@ -62,6 +62,8 @@ struct packet_cb {
 	atomic_t state;
 	u32 mtu;
 	u8 ds;
+	bool obf_learned;
+	u16 obf_wire_len;
 };
 
 #define PACKET_CB(skb) ((struct packet_cb *)((skb)->cb))

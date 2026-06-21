@@ -10,6 +10,7 @@
 #include "ratelimiter.h"
 #include "peer.h"
 #include "messages.h"
+#include "obfuscation.h"
 
 #include <linux/module.h>
 #include <linux/rtnetlink.h>
@@ -108,6 +109,7 @@ static int wg_stop(struct net_device *dev)
 		wg_noise_handshake_clear(&peer->handshake);
 		wg_noise_keypairs_clear(&peer->keypairs);
 		wg_noise_reset_last_sent_handshake(&peer->last_sent_handshake);
+		wg_obf_peer_reset_format(peer);
 	}
 	mutex_unlock(&wg->device_update_lock);
 	while ((skb = ptr_ring_consume(&wg->handshake_queue.ring)) != NULL)
