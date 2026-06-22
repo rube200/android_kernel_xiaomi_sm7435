@@ -29,6 +29,7 @@ static const struct nla_policy device_policy[WGDEVICE_A_MAX + 1] = {
 	[WGDEVICE_A_LISTEN_PORT]	= { .type = NLA_U16 },
 	[WGDEVICE_A_FWMARK]		= { .type = NLA_U32 },
 	[WGDEVICE_A_PEERS]		= { .type = NLA_NESTED },
+	[WGDEVICE_A_OBFUSCATION_SUPPORT] = { .type = NLA_U8 },
 };
 
 static const struct nla_policy peer_policy[WGPEER_A_MAX + 1] = {
@@ -244,7 +245,9 @@ static int wg_get_device_dump(struct sk_buff *skb, struct netlink_callback *cb)
 				wg->incoming_port) ||
 		    nla_put_u32(skb, WGDEVICE_A_FWMARK, wg->fwmark) ||
 		    nla_put_u32(skb, WGDEVICE_A_IFINDEX, wg->dev->ifindex) ||
-		    nla_put_string(skb, WGDEVICE_A_IFNAME, wg->dev->name))
+		    nla_put_string(skb, WGDEVICE_A_IFNAME, wg->dev->name) ||
+		    nla_put_u8(skb, WGDEVICE_A_OBFUSCATION_SUPPORT,
+			       WG_OBFUSCATION_UAPI_VERSION))
 			goto out;
 
 		down_read(&wg->static_identity.lock);
@@ -520,6 +523,12 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 
 	if (IS_ERR(wg)) {
 		ret = PTR_ERR(wg);
+		goto out_nodev;
+	}
+
+	if (info->attrs[WGDEVICE_A_OBFUSCATION_SUPPORT]) {
+		dev_put(wg->dev);
+		ret = -EINVAL;
 		goto out_nodev;
 	}
 
