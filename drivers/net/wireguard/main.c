@@ -16,11 +16,14 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/genetlink.h>
+#include <linux/build_bug.h>
 #include <net/rtnetlink.h>
 
 static int __init mod_init(void)
 {
 	int ret;
+
+	BUILD_BUG_ON(WG_OBFUSCATION_UAPI_VERSION != 1);
 
 	ret = wg_allowedips_slab_init();
 	if (ret < 0)

@@ -17,8 +17,31 @@ The in-kernel WireGuard driver (`drivers/net/wireguard/`) adds optional **UDP pa
 | Handshakes, keys, ChaCha20-Poly1305 payloads | unchanged | unchanged |
 | UDP packet layout (header + optional handshake padding) | standard | obfuscated when enabled |
 | Netlink | standard | + `WGPEER_A_OBFUSCATION`, `WGPEER_A_OBFUSCATION_FORMAT` |
+| Driver version / device attr | `1.0.0` / absent | `1.0.0+obf1` / `WGDEVICE_A_OBFUSCATION_SUPPORT=1` |
 
 Encode before send, decode after receive — then normal WireGuard processing. Stock WireGuard peers cannot interoperate unless both sides run this driver (client needs userspace that sets the new netlink attr).
+
+## Detecting obfuscation support (apps)
+
+VPN apps need to distinguish **WireGuard present** from **obfuscation UAPI supported**.
+Peer attrs 9/10 only appear on peer dump, so an empty `wg0` gives no obfuscation signal.
+Use the device-level capability below (works with zero peers).
+
+| Signal | Where | Meaning |
+|--------|-------|---------|
+| `WGDEVICE_A_OBFUSCATION_SUPPORT == 1` | GET_DEVICE dump on any `wg*` iface | **Preferred** — kernel supports obfuscation UAPI |
+| `/sys/module/wireguard/version` contains `+obf` | sysfs | Fallback — e.g. `1.0.0+obf1` |
+| `dmesg`: `WireGuard 1.0.0+obf1 loaded` | boot log | Same as sysfs |
+| `WG_GENL_VERSION` | still `1` | Netlink protocol unchanged; do not use for feature detect |
+
+**App probe flow (recommended):**
+
+1. Confirm WireGuard: `ip link add wg0 type wireguard` (or VpnService equivalent).
+2. Issue `WG_CMD_GET_DEVICE` / `wg show wg0 dump` with **zero peers** (read the **first** dump message if the reply is multi-part).
+3. If the device message includes `WGDEVICE_A_OBFUSCATION_SUPPORT` with value `1`, enable obfuscation UI and SET `WGPEER_A_OBFUSCATION` on the server peer.
+4. If absent, treat as stock WireGuard (hide obfuscation option).
+
+**Do not** bump or parse `WG_GENL_VERSION` for this feature. Do not send `WGDEVICE_A_OBFUSCATION_SUPPORT` on SET (kernel returns `-EINVAL`). Stock `wireguard-tools` ignores unknown device attrs; patched apps must read the attr by ID from `wireguard.h` (`WGDEVICE_A_OBFUSCATION_SUPPORT`, numeric ID 9).
 
 ### Tests
 
@@ -86,6 +109,7 @@ Vendor netlink attributes (see `include/uapi/linux/wireguard.h`):
 
 | Attribute | ID | SET | GET |
 |-----------|----|-----|-----|
+| `WGDEVICE_A_OBFUSCATION_SUPPORT` | 9 | — (read-only; `-EINVAL` on SET) | u8 `1` (first GET dump message only) |
 | `WGPEER_A_OBFUSCATION` | 9 | u8 `0` or `1` | u8 `0` or `1` (only if configured) |
 | `WGPEER_A_OBFUSCATION_FORMAT` | 10 | — (read-only) | u8 format enum |
 
@@ -148,7 +172,8 @@ On `wg down` (`wg_obf_peer_reset_format`):
 | `drivers/net/wireguard/obfuscation.c`, `obfuscation.h` | Encode/decode, parse, wrap, send decision |
 | `drivers/net/wireguard/send.c` | Obfuscate handshake and data headers on TX |
 | `drivers/net/wireguard/receive.c` | Parse before dispatch; learn format on RX |
-| `drivers/net/wireguard/netlink.c` | Peer GET/SET for obfuscation attributes |
+| `drivers/net/wireguard/netlink.c` | Peer GET/SET; device GET emits `WGDEVICE_A_OBFUSCATION_SUPPORT`; SET rejects it |
+| `drivers/net/wireguard/version.h` | Driver version string (`1.0.0+obf1`); must match `WG_OBFUSCATION_UAPI_VERSION` |
 | `drivers/net/wireguard/peer.h` | Peer obfuscation fields |
 | `drivers/net/wireguard/device.c` | `wg_obf_peer_reset_format()` on interface stop |
 | `include/uapi/linux/wireguard.h` | UAPI attribute definitions |

@@ -29,6 +29,9 @@
  *    WGDEVICE_A_PUBLIC_KEY: NLA_EXACT_LEN, len WG_KEY_LEN
  *    WGDEVICE_A_LISTEN_PORT: NLA_U16
  *    WGDEVICE_A_FWMARK: NLA_U32
+ *    WGDEVICE_A_OBFUSCATION_SUPPORT: NLA_U8 (vendor extension, read-only;
+ *        present on patched kernels; value equals WG_OBFUSCATION_UAPI_VERSION;
+ *        first dump message only; must not be sent on SET (-EINVAL))
  *    WGDEVICE_A_PEERS: NLA_NESTED
  *        0: NLA_NESTED
  *            WGPEER_A_PUBLIC_KEY: NLA_EXACT_LEN, len WG_KEY_LEN
@@ -64,10 +67,12 @@
  * WGPEER_A_PUBLIC_KEY and WGPEER_A_ALLOWEDIPS. This may occur several
  * times in a row for the same peer. It is then up to the receiver to
  * coalesce adjacent peers. Likewise, it is possible that all peers will
- * not fit within a single message. So, subsequent peers will be sent
- * in following messages, except those will only contain WGDEVICE_A_IFNAME
- * and WGDEVICE_A_PEERS. It is then up to the receiver to coalesce these
- * messages to form the complete list of peers.
+ * not fit within a single message. So, subsequent messages contain only
+ * WGDEVICE_A_PEERS (remaining peers). Device-level attributes (IFINDEX,
+ * IFNAME, LISTEN_PORT, FWMARK, keys, WGDEVICE_A_OBFUSCATION_SUPPORT)
+ * appear only in the first message of a dump. It is then up to the
+ * receiver to coalesce these messages to form the complete list of peers.
+ * Apps probing obfuscation support must read the first GET_DEVICE reply.
  *
  * Since this is an NLA_F_DUMP command, the final message will always be
  * NLMSG_DONE, even if an error occurs. However, this NLMSG_DONE message
@@ -88,6 +93,7 @@
  *    WGDEVICE_A_PRIVATE_KEY: len WG_KEY_LEN, all zeros to remove
  *    WGDEVICE_A_LISTEN_PORT: NLA_U16, 0 to choose randomly
  *    WGDEVICE_A_FWMARK: NLA_U32, 0 to disable
+ *    WGDEVICE_A_OBFUSCATION_SUPPORT: must not be sent on SET (-EINVAL)
  *    WGDEVICE_A_PEERS: NLA_NESTED
  *        0: NLA_NESTED
  *            WGPEER_A_PUBLIC_KEY: len WG_KEY_LEN
@@ -133,6 +139,16 @@
  * of a peer, it likely should not be specified in subsequent fragments.
  *
  * If an error occurs, NLMSG_ERROR will reply containing an errno.
+ *
+ * Vendor obfuscation extensions
+ * -----------------------------
+ *
+ * Patched kernels advertise obfuscation UAPI support via:
+ *   - WGDEVICE_A_OBFUSCATION_SUPPORT on GET_DEVICE (preferred for apps)
+ *   - Driver version string "1.0.0+obfN" in dmesg and /sys/module/wireguard/version
+ *     where N equals WG_OBFUSCATION_UAPI_VERSION
+ *
+ * WG_GENL_VERSION is unchanged; do not use it for obfuscation capability detection.
  */
 
 #ifndef _WG_UAPI_WIREGUARD_H
@@ -140,6 +156,8 @@
 
 #define WG_GENL_NAME "wireguard"
 #define WG_GENL_VERSION 1
+
+#define WG_OBFUSCATION_UAPI_VERSION 1
 
 #define WG_KEY_LEN 32
 
@@ -164,6 +182,7 @@ enum wgdevice_attribute {
 	WGDEVICE_A_LISTEN_PORT,
 	WGDEVICE_A_FWMARK,
 	WGDEVICE_A_PEERS,
+	WGDEVICE_A_OBFUSCATION_SUPPORT,
 	__WGDEVICE_A_LAST
 };
 #define WGDEVICE_A_MAX (__WGDEVICE_A_LAST - 1)
