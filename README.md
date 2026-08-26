@@ -3,10 +3,44 @@
 Kernel source to build **LineageOS on Qualcomm sm7435** (parrot). Developed on
 **garnet** (Redmi Note 13 Pro 5G).
 
-**Why this repo exists:** ship a working Lineage kernel for sm7435 phones. The
-custom work here is **WireGuard traffic obfuscation** — VPN UDP packets are harder
-to detect and block than stock WireGuard, while crypto and the Noise protocol stay
-the same. All other code is normal platform support (display, audio, Wi‑Fi, …).
+**Why this repo exists:** ship a working Lineage kernel for sm7435 phones. Two
+things are custom here; everything else is normal platform support (display,
+audio, Wi‑Fi, …).
+
+| Feature | What it is | Where |
+|---------|------------|-------|
+| **KernelSU-Next** | Kernel-side root, pulled in as a git submodule rather than vendored | `KernelSU-Next/`, `drivers/kernelsu` |
+| **WireGuard obfuscation** | VPN UDP packets are harder to detect and block than stock WireGuard, while crypto and the Noise protocol stay the same | `drivers/net/wireguard/` |
+
+## KernelSU-Next (root)
+
+Root support from [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next),
+kept as a submodule so it stays out of this kernel's history. The whole
+integration:
+
+| Where | What |
+|-------|------|
+| `KernelSU-Next/` | Submodule, branch `stable`, pinned at `v3.3.0` (`3b18216f`) |
+| `drivers/kernelsu` | Symlink to `../KernelSU-Next/kernel` — only that subdir is built |
+| `drivers/Kconfig` | `source "drivers/kernelsu/Kconfig"` |
+| `drivers/Makefile` | `obj-$(CONFIG_KSU) += kernelsu/` |
+
+Neither `git clone` nor `repo sync` fetches the submodule, and without it
+`drivers/kernelsu` dangles and the build stops at `drivers/kernelsu/Kconfig`:
+
+```
+git submodule update --init --recursive
+```
+
+Bump it with `git submodule update --remote KernelSU-Next`, then commit the new
+pointer.
+
+`CONFIG_KSU` defaults to `y` and its dependencies (`KPROBES`, `EXT4_FS`) are
+already set in `gki_defconfig`, so a normal build compiles root in with no
+defconfig change here. For the remaining options and how root itself works, see
+upstream.
+
+---
 
 ## WireGuard obfuscation
 
